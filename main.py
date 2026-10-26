@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-CATATAN KEUANGAN (Kivy) - tampilan modern, mode portrait, bisa dijadikan APK.
+CATATAN KEUANGAN v2 (Kivy) - tampilan akuntan, dashboard interaktif, tema terang/gelap.
 
-Fitur: Beranda, Transaksi, Hutang & Piutang, Tabungan, Anggaran, Laporan (grafik),
-       Ekspor/Bagikan CSV, Backup database.
-Data tersimpan di database SQLite pada folder data aplikasi.
+Isi: Beranda (dashboard), Transaksi (Daftar & Buku Kas), Hutang/Piutang, Tabungan,
+     Anggaran, Laporan (Laba Rugi, Neraca, Grafik), Ekspor/Backup.
+Data memakai database yang sama dengan versi sebelumnya (keuangan.db).
 """
 import os
 import re
@@ -16,14 +16,15 @@ import sqlite3
 import calendar
 from datetime import date, datetime, timedelta
 
+from kivy.animation import Animation
 from kivy.app import App
 from kivy.clock import Clock
 from kivy.core.clipboard import Clipboard
 from kivy.core.window import Window
-from kivy.graphics import Color, RoundedRectangle, Rectangle, Ellipse
+from kivy.graphics import Color, RoundedRectangle, Rectangle, Ellipse, Line, Mesh
 from kivy.graphics.texture import Texture
 from kivy.metrics import dp, sp
-from kivy.properties import BooleanProperty, StringProperty
+from kivy.properties import BooleanProperty, StringProperty, NumericProperty
 from kivy.uix.behaviors import ButtonBehavior
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.floatlayout import FloatLayout
@@ -39,23 +40,33 @@ from kivy.utils import get_color_from_hex as hx, platform
 Window.softinput_mode = "below_target"
 
 # ----------------------------------------------------------------------
-# WARNA
+# TEMA (terang / gelap)
 # ----------------------------------------------------------------------
-C_BG = hx("#F4F5FB")
-C_CARD = (1, 1, 1, 1)
-C_PRIMER = hx("#4F46E5")
-C_UNGU = hx("#7C3AED")
-C_HIJAU = hx("#16A34A")
-C_TOSCA = hx("#0D9488")
-C_MERAH = hx("#E11D48")
-C_ORANYE = hx("#F59E0B")
-C_BIRU = hx("#0EA5E9")
-C_TEKS = hx("#1E1B4B")
-C_ABU = hx("#6B7280")
-C_FIELD = hx("#EEF0F7")
+TEMA = {
+    "terang": dict(BG="#EEF2F8", CARD="#FFFFFF", TEKS="#0B1B33", ABU="#64748B", FIELD="#E8EDF5",
+                   GARIS="#DCE3EE", PRIMER="#12437A", HDR1="#0A2342", HDR2="#16457C",
+                   HERO1="#0A2342", HERO2="#1F6FB5", AKSEN="#C99A2E", HIJAU="#059669",
+                   MERAH="#DC2626", ORANYE="#D97706", BIRU="#0284C7", TOSCA="#0D9488", UNGU="#7C3AED"),
+    "gelap": dict(BG="#0A1120", CARD="#131D31", TEKS="#E6ECF5", ABU="#8D9DB5", FIELD="#1B2842",
+                  GARIS="#26354F", PRIMER="#3B82F6", HDR1="#0C1A33", HDR2="#14315C",
+                  HERO1="#12315E", HERO2="#1E6FA8", AKSEN="#F5C451", HIJAU="#34D399",
+                  MERAH="#F87171", ORANYE="#FBBF24", BIRU="#38BDF8", TOSCA="#2DD4BF", UNGU="#A78BFA"),
+}
+TEMA_AKTIF = "terang"
 PUTIH = (1, 1, 1, 1)
-PALET = [hx("#4F46E5"), hx("#0EA5E9"), hx("#16A34A"), hx("#F59E0B"),
-         hx("#E11D48"), hx("#7C3AED"), hx("#0D9488"), hx("#EA580C")]
+PALET = []
+
+
+def pasang_tema(nama):
+    global TEMA_AKTIF, PALET
+    TEMA_AKTIF = nama
+    for k, v in TEMA[nama].items():
+        globals()["C_" + k] = hx(v)
+    PALET = [hx("#2563EB"), C_TOSCA, C_AKSEN, C_MERAH, C_UNGU, C_BIRU, C_ORANYE, C_HIJAU]
+    Window.clearcolor = C_BG
+
+
+pasang_tema("terang")
 
 KAT_MASUK = ["Gaji", "Bonus", "Usaha", "Hadiah", "Investasi", "Terima Piutang", "Tarik Tabungan", "Lainnya"]
 KAT_KELUAR = ["Makan & Minum", "Transportasi", "Belanja", "Tagihan", "Pulsa & Internet",
@@ -63,10 +74,18 @@ KAT_KELUAR = ["Makan & Minum", "Transportasi", "Belanja", "Tagihan", "Pulsa & In
               "Bayar Hutang", "Lainnya"]
 BULAN = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli",
          "Agustus", "September", "Oktober", "November", "Desember"]
+HARI = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
+PERIODE = [("bulan", "Bulan Ini"), ("3bln", "3 Bulan"), ("tahun", "Tahun Ini"), ("semua", "Semua")]
 
 
 def tint(c, a=0.12):
-    return (1 - a + a * c[0], 1 - a + a * c[1], 1 - a + a * c[2], 1)
+    b = C_CARD
+    return (b[0] * (1 - a) + c[0] * a, b[1] * (1 - a) + c[1] * a, b[2] * (1 - a) + c[2] * a, 1)
+
+
+def fg_on(c):
+    lum = 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]
+    return hx("#0B1B33") if lum > 0.62 else PUTIH
 
 
 def warna_kat(nama):
@@ -97,11 +116,16 @@ def rp(n):
     return ("-" if n < 0 else "") + "Rp " + s
 
 
+def angka(n):
+    n = float(n or 0)
+    return ("-" if n < 0 else "") + "{:,.0f}".format(abs(n)).replace(",", ".")
+
+
 def parse_uang(s):
-    angka = re.sub(r"\D", "", str(s))
-    if not angka or int(angka) <= 0:
+    a = re.sub(r"\D", "", str(s))
+    if not a or int(a) <= 0:
         raise ValueError("Jumlah harus berupa angka lebih dari 0.")
-    return float(angka)
+    return float(a)
 
 
 def parse_uang_opsional(s):
@@ -124,6 +148,44 @@ def fmt_angka(s):
     return "{:,}".format(int(d)).replace(",", ".") if d else ""
 
 
+def awal_bulan(d, n=0):
+    m = d.month - 1 + n
+    return date(d.year + m // 12, m % 12 + 1, 1)
+
+
+def akhir_bulan(d):
+    return date(d.year, d.month, calendar.monthrange(d.year, d.month)[1])
+
+
+def rentang(kode):
+    t = date.today()
+    if kode == "bulan":
+        a, b = awal_bulan(t), akhir_bulan(t)
+        pa = awal_bulan(t, -1)
+        pb = akhir_bulan(pa)
+    elif kode == "3bln":
+        a, b = awal_bulan(t, -2), akhir_bulan(t)
+        pa, pb = awal_bulan(t, -5), a - timedelta(days=1)
+    elif kode == "tahun":
+        a, b = date(t.year, 1, 1), date(t.year, 12, 31)
+        pa, pb = date(t.year - 1, 1, 1), date(t.year - 1, 12, 31)
+    else:
+        return "0000-01-01", "9999-12-31", None, None
+    return a.isoformat(), b.isoformat(), pa.isoformat(), pb.isoformat()
+
+
+def delta(now, prev, naik_baik=True):
+    if prev is None:
+        return "", C_ABU
+    if prev == 0 and now == 0:
+        return "tidak ada perubahan", C_ABU
+    if prev == 0:
+        return "tanpa pembanding", C_ABU
+    p = (now - prev) / abs(prev) * 100
+    baik = (p >= 0) == naik_baik
+    return "%+.0f%% vs periode lalu" % p, (C_HIJAU if baik else C_MERAH)
+
+
 # ----------------------------------------------------------------------
 # DATABASE
 # ----------------------------------------------------------------------
@@ -139,6 +201,8 @@ CREATE TABLE IF NOT EXISTS tabungan(
     terkumpul REAL DEFAULT 0, tenggat TEXT, catatan TEXT);
 CREATE TABLE IF NOT EXISTS anggaran(
     kategori TEXT PRIMARY KEY, batas REAL);
+CREATE TABLE IF NOT EXISTS pengaturan(
+    k TEXT PRIMARY KEY, v TEXT);
 """
 
 
@@ -162,12 +226,19 @@ class DB:
         r = self.c.execute(sql, a).fetchone()
         return (r[0] or 0) if r else 0
 
+    def get(self, k, default=""):
+        r = self.c.execute("SELECT v FROM pengaturan WHERE k=?", (k,)).fetchone()
+        return r[0] if r else default
+
+    def put(self, k, v):
+        self.x("INSERT OR REPLACE INTO pengaturan(k,v) VALUES(?,?)", (k, str(v)))
+
 
 # ----------------------------------------------------------------------
 # WIDGET DASAR
 # ----------------------------------------------------------------------
 class Lbl(Label):
-    """Label rata kiri yang otomatis membungkus teks & menyesuaikan tinggi."""
+    """Label rata kiri, teks membungkus & tinggi menyesuaikan."""
 
     def __init__(self, text="", size=14, warna=None, bold=False, rata="left", **kw):
         kw.setdefault("size_hint_y", None)
@@ -179,12 +250,29 @@ class Lbl(Label):
         self.text_size = (self.width, None)
 
     def _t(self, *a):
-        self.height = max(self.texture_size[1], dp(18))
+        self.height = max(self.texture_size[1], dp(16))
+
+
+class Angka(Lbl):
+    """Angka yang berhitung naik (count-up)."""
+    nilai = NumericProperty(0)
+
+    def __init__(self, target=0, size=20, warna=None, bold=True, fmt=None, animasi=True, **kw):
+        super().__init__("", size, warna, bold, **kw)
+        self._fmt = fmt or rp
+        self.bind(nilai=self._ubah)
+        if animasi:
+            self.text = self._fmt(0)
+            Animation(nilai=target, d=0.8, t="out_cubic").start(self)
+        else:
+            self.nilai = target
+            self.text = self._fmt(target)
+
+    def _ubah(self, *a):
+        self.text = self._fmt(self.nilai)
 
 
 class Kolom(BoxLayout):
-    """BoxLayout vertikal yang tingginya menyesuaikan isi."""
-
     def __init__(self, **kw):
         kw.setdefault("orientation", "vertical")
         kw.setdefault("size_hint_y", None)
@@ -199,7 +287,7 @@ class Lapisan(BoxLayout):
             Color(*(warna or C_BG))
             self._r = Rectangle()
             if garis:
-                Color(0.1, 0.1, 0.3, 0.08)
+                Color(*C_GARIS)
                 self._g = Rectangle()
         self._garis = garis
         self.bind(pos=self._u, size=self._u)
@@ -213,17 +301,20 @@ class Lapisan(BoxLayout):
 
 
 class Kartu(Kolom):
-    def __init__(self, warna=None, grad=None, pad=14, radius=18, shadow=True, **kw):
+    def __init__(self, warna=None, grad=None, pad=14, radius=16, shadow=True, garis=True, **kw):
         if "padding" not in kw:
             kw["padding"] = [dp(p) for p in pad] if isinstance(pad, (list, tuple)) else dp(pad)
         kw.setdefault("spacing", dp(6))
         super().__init__(**kw)
         rad = list(radius) if isinstance(radius, (list, tuple)) else [dp(radius)]
-        self._sh = None
+        self._sh = self._bd = None
         with self.canvas.before:
-            if shadow:
-                Color(0.1, 0.1, 0.3, 0.06)
+            if shadow and TEMA_AKTIF == "terang":
+                Color(0.05, 0.1, 0.25, 0.06)
                 self._sh = RoundedRectangle(radius=rad)
+            if garis:
+                Color(*C_GARIS)
+                self._bd = RoundedRectangle(radius=rad)
             if grad:
                 Color(1, 1, 1, 1)
                 self._bg = RoundedRectangle(radius=rad, texture=gradient(*grad))
@@ -236,6 +327,9 @@ class Kartu(Kolom):
         if self._sh is not None:
             self._sh.pos = (self.x, self.y - dp(2))
             self._sh.size = self.size
+        if self._bd is not None:
+            self._bd.pos = (self.x - 1, self.y - 1)
+            self._bd.size = (self.width + 2, self.height + 2)
         self._bg.pos = self.pos
         self._bg.size = self.size
 
@@ -247,13 +341,13 @@ class KartuTap(ButtonBehavior, Kartu):
 class Tombol(ButtonBehavior, Label):
     def __init__(self, text="", warna=None, fg=None, kecil=False, **kw):
         kw.setdefault("size_hint_y", None)
-        kw.setdefault("height", dp(38 if kecil else 50))
-        super().__init__(text=text, bold=True, font_size=sp(13 if kecil else 15),
-                         color=fg or PUTIH, **kw)
+        kw.setdefault("height", dp(36 if kecil else 50))
         self.warna = warna or C_PRIMER
+        super().__init__(text=text, bold=True, font_size=sp(12 if kecil else 15),
+                         color=fg or fg_on(self.warna), **kw)
         with self.canvas.before:
             self._c = Color(*self.warna)
-            self._r = RoundedRectangle(radius=[dp(12 if kecil else 14)])
+            self._r = RoundedRectangle(radius=[dp(10 if kecil else 14)])
         self.bind(pos=self._u, size=self._u, state=self._s)
 
     def _u(self, *a):
@@ -262,17 +356,17 @@ class Tombol(ButtonBehavior, Label):
 
     def _s(self, *a):
         w = self.warna
-        self._c.rgba = (w[0] * 0.82, w[1] * 0.82, w[2] * 0.82, w[3]) if self.state == "down" else w
+        self._c.rgba = (w[0] * 0.8, w[1] * 0.8, w[2] * 0.8, w[3]) if self.state == "down" else w
 
 
 class Fab(ButtonBehavior, Label):
     def __init__(self, **kw):
-        super().__init__(text="+", font_size=sp(34), bold=True, color=PUTIH,
+        super().__init__(text="+", font_size=sp(34), bold=True, color=hx("#0A2342"),
                          size_hint=(None, None), size=(dp(58), dp(58)), **kw)
         with self.canvas.before:
-            Color(0.1, 0.1, 0.3, 0.2)
+            Color(0, 0, 0, 0.22)
             self._s = Ellipse()
-            self._c = Color(*C_PRIMER)
+            self._c = Color(*C_AKSEN)
             self._e = Ellipse()
         self.bind(pos=self._u, size=self._u, state=self._st)
 
@@ -283,11 +377,11 @@ class Fab(ButtonBehavior, Label):
         self._e.size = self.size
 
     def _st(self, *a):
-        self._c.rgba = C_UNGU if self.state == "down" else C_PRIMER
+        a = C_AKSEN
+        self._c.rgba = (a[0] * 0.8, a[1] * 0.8, a[2] * 0.8, 1) if self.state == "down" else a
 
 
 class Entry(BoxLayout):
-    """Kolom isian dengan latar membulat (TextInput dibungkus agar gambarnya tidak rusak)."""
     text = StringProperty("")
 
     def __init__(self, text="", hint_text="", input_type="text", **kw):
@@ -298,7 +392,8 @@ class Entry(BoxLayout):
                             font_size=sp(16), padding=[0, dp(15), 0, dp(10)],
                             background_normal="", background_active="", background_color=(0, 0, 0, 0),
                             foreground_color=C_TEKS, cursor_color=C_PRIMER,
-                            hint_text_color=(0.6, 0.62, 0.7, 1), selection_color=(*C_PRIMER[:3], 0.3))
+                            hint_text_color=(C_ABU[0], C_ABU[1], C_ABU[2], 0.7),
+                            selection_color=(C_PRIMER[0], C_PRIMER[1], C_PRIMER[2], 0.3))
         self.text = text
         self.ti.bind(text=self._dari_ti)
         self.bind(text=self._ke_ti)
@@ -338,7 +433,7 @@ class UangEntry(Entry):
 
 class Opt(SpinnerOption):
     def __init__(self, **kw):
-        super().__init__(background_normal="", background_down="", background_color=PUTIH,
+        super().__init__(background_normal="", background_down="", background_color=C_CARD,
                          color=C_TEKS, font_size=sp(15), size_hint_y=None, height=dp(46), **kw)
 
 
@@ -363,8 +458,6 @@ class Pilih(Spinner):
 
 
 class Baris(BoxLayout):
-    """Satu baris: teks kiri + teks kanan (angka)."""
-
     def __init__(self, kiri, kanan, wk=None, size=14, bold_kiri=False, bold_kanan=True, wkiri=None, **kw):
         super().__init__(orientation="horizontal", size_hint_y=None, height=dp(26), spacing=dp(8), **kw)
         self.k = Lbl(kiri, size, wkiri, bold_kiri, size_hint_y=1)
@@ -376,29 +469,45 @@ class Baris(BoxLayout):
         self.add_widget(self.r)
 
 
+class Garis(Widget):
+    def __init__(self, tebal=1, **kw):
+        super().__init__(size_hint_y=None, height=dp(tebal), **kw)
+        with self.canvas:
+            Color(*C_GARIS)
+            self._r = Rectangle()
+        self.bind(pos=lambda *a: setattr(self._r, "pos", self.pos),
+                  size=lambda *a: setattr(self._r, "size", self.size))
+
+
 class Bar(Widget):
-    def __init__(self, pct=0, warna=None, **kw):
+    pct = NumericProperty(0)
+
+    def __init__(self, target=0, warna=None, animasi=True, **kw):
         super().__init__(size_hint_y=None, height=dp(10), **kw)
-        self.pct = max(0.0, min(float(pct), 1.0))
+        t = max(0.0, min(float(target), 1.0))
         with self.canvas:
             Color(*C_FIELD)
             self._t = RoundedRectangle(radius=[dp(5)])
             Color(*(warna or C_PRIMER))
             self._f = RoundedRectangle(radius=[dp(5)])
-        self.bind(pos=self._u, size=self._u)
+        self.bind(pos=self._u, size=self._u, pct=self._u)
+        if animasi:
+            Animation(pct=t, d=0.7, t="out_cubic").start(self)
+        else:
+            self.pct = t
 
     def _u(self, *a):
         self._t.pos = self.pos
         self._t.size = self.size
         self._f.pos = self.pos
         w = self.width * self.pct
-        self._f.size = (max(w, dp(10)) if self.pct > 0 else 0, self.height)
+        self._f.size = (max(w, dp(10)) if self.pct > 0.001 else 0, self.height)
 
 
 class Avatar(Label):
     def __init__(self, teks, warna, **kw):
-        super().__init__(text=(teks[:1] or "?").upper(), bold=True, font_size=sp(17), color=PUTIH,
-                         size_hint=(None, None), size=(dp(42), dp(42)), **kw)
+        super().__init__(text=(teks[:1] or "?").upper(), bold=True, font_size=sp(16), color=PUTIH,
+                         size_hint=(None, None), size=(dp(40), dp(40)), **kw)
         with self.canvas.before:
             Color(*warna)
             self._e = Ellipse()
@@ -421,62 +530,183 @@ class Dot(Widget):
 
 class Header(BoxLayout):
     def __init__(self, **kw):
-        super().__init__(orientation="horizontal", size_hint_y=None, height=dp(64),
-                         padding=[dp(14), dp(8), dp(14), dp(8)], spacing=dp(10), **kw)
+        super().__init__(orientation="horizontal", size_hint_y=None, height=dp(68),
+                         padding=[dp(14), dp(8), dp(12), dp(10)], spacing=dp(10), **kw)
         with self.canvas.before:
             Color(1, 1, 1, 1)
-            self._r = Rectangle(texture=gradient(C_PRIMER, C_UNGU))
+            self._r = Rectangle(texture=gradient(C_HDR1, C_HDR2))
+            Color(*C_AKSEN)
+            self._g = Rectangle()
         self.bind(pos=self._u, size=self._u)
-        self.judul = Label(text="", font_size=sp(21), bold=True, color=PUTIH, halign="left", valign="middle")
-        self.judul.bind(size=lambda i, s: setattr(i, "text_size", s))
+        self.judul = Label(text="", font_size=sp(19), bold=True, color=PUTIH, halign="left", valign="bottom")
+        self.sub = Label(text="", font_size=sp(11), color=(1, 1, 1, 0.7), halign="left", valign="top")
+        for lb in (self.judul, self.sub):
+            lb.bind(size=lambda i, s: setattr(i, "text_size", s))
+        self.kol = BoxLayout(orientation="vertical", spacing=dp(1))
+        self.kol.add_widget(self.judul)
+        self.kol.add_widget(self.sub)
 
     def _u(self, *a):
         self._r.pos = self.pos
         self._r.size = self.size
+        self._g.pos = self.pos
+        self._g.size = (self.width, dp(2))
 
-    def set(self, teks, kembali=None):
+    def set(self, teks, kembali=None, sub="", aksi=None):
         self.clear_widgets()
         if kembali:
-            b = Tombol("<", warna=(1, 1, 1, 0.2), size_hint=(None, None), size=(dp(42), dp(42)),
+            b = Tombol("<", warna=(1, 1, 1, 0.18), fg=PUTIH, size_hint=(None, None), size=(dp(40), dp(40)),
                        pos_hint={"center_y": 0.5})
             b.bind(on_release=lambda *a: kembali())
             self.add_widget(b)
         self.judul.text = teks
-        self.add_widget(self.judul)
+        self.sub.text = sub
+        self.add_widget(self.kol)
+        if aksi:
+            b = Tombol(aksi[0], warna=(1, 1, 1, 0.16), fg=PUTIH, kecil=True, size_hint=(None, None),
+                       size=(dp(74), dp(34)), pos_hint={"center_y": 0.5})
+            b.bind(on_release=lambda *a: aksi[1]())
+            self.add_widget(b)
 
 
 class NavItem(ButtonBehavior, Label):
     aktif = BooleanProperty(False)
 
-    def __init__(self, teks, **kw):
-        super().__init__(text=teks, font_size=sp(12), bold=True, **kw)
+    def __init__(self, kode, teks, **kw):
+        super().__init__(text=teks, font_size=sp(11), bold=True, halign="center", valign="bottom",
+                         padding=[0, dp(7)], **kw)
+        self.kode = kode
         with self.canvas.before:
             self._c = Color(0, 0, 0, 0)
-            self._r = RoundedRectangle(radius=[dp(16)])
-        self.bind(pos=self._u, size=self._u, aktif=self._a)
-        self._a()
+            self._r = RoundedRectangle(radius=[dp(14)])
+        self.bind(pos=self._u, size=self._u, aktif=self._u)
+        self._u()
 
     def _u(self, *a):
-        w, h = self.width * 0.86, dp(36)
+        self.text_size = self.size
+        w, h = self.width * 0.82, self.height - dp(8)
         self._r.size = (w, h)
-        self._r.pos = (self.center_x - w / 2, self.center_y - h / 2)
-
-    def _a(self, *a):
-        self.color = C_PRIMER if self.aktif else C_ABU
+        self._r.pos = (self.center_x - w / 2, self.y + dp(4))
+        w_ = C_PRIMER if self.aktif else C_ABU
+        self.color = w_
         self._c.rgba = tint(C_PRIMER, 0.13) if self.aktif else (0, 0, 0, 0)
+        self._ikon(w_)
+
+    def _ikon(self, warna):
+        self.canvas.after.clear()
+        cx, cy, s = self.center_x, self.y + self.height * 0.63, dp(9.5)
+        lw = dp(1.6)
+        with self.canvas.after:
+            Color(*warna)
+            k = self.kode
+            if k == "ringkasan":
+                q = s * 0.82
+                for dx, dy in ((-1, 1), (1, 1), (-1, -1), (1, -1)):
+                    RoundedRectangle(pos=(cx + dx * s * 0.55 - q / 2, cy + dy * s * 0.55 - q / 2),
+                                     size=(q, q), radius=[dp(2.5)])
+            elif k == "transaksi":
+                Line(points=[cx - s, cy + s * .45, cx + s, cy + s * .45], width=lw, cap="round")
+                Line(points=[cx + s * .5, cy + s * .95, cx + s, cy + s * .45, cx + s * .5, cy - s * .05],
+                     width=lw, cap="round", joint="round")
+                Line(points=[cx + s, cy - s * .45, cx - s, cy - s * .45], width=lw, cap="round")
+                Line(points=[cx - s * .5, cy + s * .05, cx - s, cy - s * .45, cx - s * .5, cy - s * .95],
+                     width=lw, cap="round", joint="round")
+            elif k == "hutang":
+                Line(rounded_rectangle=(cx - s * .8, cy - s, s * 1.6, s * 2, dp(3)), width=lw)
+                Line(points=[cx - s * .4, cy + s * .35, cx + s * .4, cy + s * .35], width=lw, cap="round")
+                Line(points=[cx - s * .4, cy - s * .05, cx + s * .4, cy - s * .05], width=lw, cap="round")
+                Line(points=[cx - s * .4, cy - s * .45, cx + s * .1, cy - s * .45], width=lw, cap="round")
+            elif k == "tabungan":
+                Line(circle=(cx, cy, s), width=lw)
+                Line(circle=(cx, cy, s * .5), width=lw)
+            else:
+                for dx in (-1, 0, 1):
+                    Ellipse(pos=(cx + dx * s * .8 - dp(2.2), cy - dp(2.2)), size=(dp(4.4), dp(4.4)))
+
+
+class Fab_(Widget):
+    pass
+
+
+# ----------------------------------------------------------------------
+# GRAFIK
+# ----------------------------------------------------------------------
+class ChartArus(Widget):
+    """Grafik garis pemasukan vs pengeluaran, bisa disentuh."""
+    sel = NumericProperty(-1)
+    prog = NumericProperty(0)
+
+    def __init__(self, data, on_pilih=None, **kw):
+        super().__init__(size_hint_y=None, height=dp(170), **kw)
+        self.data = data
+        self.on_pilih = on_pilih
+        self.maks = max([max(d[1], d[2]) for d in data] + [1])
+        self.bind(pos=self.gambar, size=self.gambar, sel=self.gambar, prog=self.gambar)
+        Animation(prog=1, d=0.8, t="out_cubic").start(self)
+
+    def gambar(self, *a):
+        self.canvas.clear()
+        n = len(self.data)
+        if n == 0 or self.width <= 1:
+            return
+        pt, pb = dp(10), dp(6)
+        h, w = self.height - pt - pb, self.width
+        base = self.y + pb
+        xs = [self.x + (i + 0.5) * w / n for i in range(n)]
+
+        def yv(v):
+            return base + h * (v / float(self.maks)) * self.prog
+
+        with self.canvas:
+            Color(*C_GARIS)
+            for k in range(4):
+                y = base + h * k / 3.0
+                Line(points=[self.x, y, self.x + w, y], width=1)
+            if self.sel >= 0:
+                Color(C_ABU[0], C_ABU[1], C_ABU[2], 0.35)
+                Line(points=[xs[self.sel], base, xs[self.sel], base + h], width=dp(1))
+            for col, idx in ((C_HIJAU, 1), (C_MERAH, 2)):
+                ys = [yv(d[idx]) for d in self.data]
+                verts = []
+                for x, y in zip(xs, ys):
+                    verts += [x, y, 0, 0, x, base, 0, 0]
+                Color(col[0], col[1], col[2], 0.12)
+                Mesh(vertices=verts, indices=list(range(2 * n)), mode="triangle_strip")
+                Color(*col)
+                Line(points=[c for p in zip(xs, ys) for c in p], width=dp(1.7), cap="round", joint="round")
+                for i, (x, y) in enumerate(zip(xs, ys)):
+                    r = dp(5) if i == self.sel else dp(3)
+                    if i == self.sel:
+                        Color(*C_CARD)
+                        Ellipse(pos=(x - r - dp(1.5), y - r - dp(1.5)), size=((r + dp(1.5)) * 2,) * 2)
+                        Color(*col)
+                    Ellipse(pos=(x - r, y - r), size=(r * 2, r * 2))
+
+    def on_touch_down(self, touch):
+        if self.collide_point(*touch.pos) and self.data:
+            n = len(self.data)
+            i = int((touch.x - self.x) / max(self.width, 1) * n)
+            self.sel = max(0, min(n - 1, i))
+            if self.on_pilih:
+                self.on_pilih(self.sel)
+            return True
+        return super().on_touch_down(touch)
 
 
 class Donat(FloatLayout):
-    def __init__(self, data, tengah, **kw):
-        super().__init__(size_hint_y=None, height=dp(200), **kw)
-        self.data = data
-        self.lbl = Label(text=tengah, halign="center", color=C_TEKS, font_size=sp(13), bold=True)
+    sel = NumericProperty(-1)
+
+    def __init__(self, data, tengah, on_pilih=None, **kw):
+        super().__init__(size_hint_y=None, height=dp(210), **kw)
+        self.data = data  # [(nilai, warna)]
+        self.on_pilih = on_pilih
+        self.lbl = Label(text=tengah, halign="center", color=C_TEKS, font_size=sp(12), bold=True)
         self.add_widget(self.lbl)
-        self.bind(pos=self.gambar, size=self.gambar)
+        self.bind(pos=self.gambar, size=self.gambar, sel=self.gambar)
 
     def gambar(self, *a):
         self.canvas.before.clear()
-        d = min(self.width, self.height) - dp(10)
+        d = min(self.width, self.height) - dp(24)
         if d <= 0:
             return
         x, y = self.center_x - d / 2, self.center_y - d / 2
@@ -487,32 +717,38 @@ class Donat(FloatLayout):
                 Ellipse(pos=(x, y), size=(d, d))
             else:
                 ang = 0.0
-                for v, c in self.data:
-                    Color(*c)
+                for i, (v, c) in enumerate(self.data):
                     sw = 360.0 * v / total
-                    Ellipse(pos=(x, y), size=(d, d), angle_start=ang, angle_end=ang + sw)
+                    al = 1 if self.sel < 0 or i == self.sel else 0.35
+                    Color(c[0], c[1], c[2], al)
+                    ex = dp(7) if i == self.sel else 0
+                    Ellipse(pos=(x - ex, y - ex), size=(d + 2 * ex, d + 2 * ex),
+                            angle_start=ang, angle_end=ang + sw)
                     ang += sw
-            Color(1, 1, 1, 1)
-            lub = d * 0.6
+            Color(*C_CARD)
+            lub = d * 0.62
             Ellipse(pos=(self.center_x - lub / 2, self.center_y - lub / 2), size=(lub, lub))
 
+    def on_touch_down(self, touch):
+        if self.collide_point(*touch.pos) and self.data:
+            total = sum(v for v, c in self.data)
+            dx, dy = touch.x - self.center_x, touch.y - self.center_y
+            r = math.hypot(dx, dy)
+            d = min(self.width, self.height) - dp(24)
+            if total > 0 and d * 0.31 < r < d * 0.5 + dp(10):
+                a = math.degrees(math.atan2(dx, dy)) % 360  # 0 = atas, searah jarum jam
+                acc = 0.0
+                for i, (v, c) in enumerate(self.data):
+                    acc += 360.0 * v / total
+                    if a <= acc:
+                        if self.on_pilih:
+                            self.on_pilih(i)
+                        return True
+        return super().on_touch_down(touch)
 
-class BarArea(Widget):
-    def __init__(self, m, k, maks, **kw):
-        super().__init__(**kw)
-        self.m, self.k, self.maks = m, k, max(maks, 1)
-        self.bind(pos=self.gambar, size=self.gambar)
 
-    def gambar(self, *a):
-        self.canvas.clear()
-        bw = max((self.width - dp(4)) / 2.0 - dp(2), dp(4))
-        cx = self.center_x
-        with self.canvas:
-            for i, (v, c) in enumerate(((self.m, C_HIJAU), (self.k, C_MERAH))):
-                h = max(self.height * v / self.maks, dp(3))
-                x = cx - bw - dp(1) if i == 0 else cx + dp(1)
-                Color(*c)
-                RoundedRectangle(pos=(x, self.y), size=(bw, h), radius=[dp(3)])
+class BarisTap(ButtonBehavior, Lapisan):
+    pass
 
 
 # ----------------------------------------------------------------------
@@ -523,11 +759,10 @@ class TanggalField(Kolom):
         super().__init__(spacing=dp(6), **kw)
         self.app = app
         self.nilai = nilai
-        self.opsional = opsional
         self.btn = Tombol(fmt_tgl(nilai), warna=C_FIELD, fg=C_TEKS)
         self.btn.bind(on_release=lambda *a: self.buka())
         self.add_widget(self.btn)
-        q = BoxLayout(size_hint_y=None, height=dp(38), spacing=dp(6))
+        q = BoxLayout(size_hint_y=None, height=dp(36), spacing=dp(6))
         opsi = [("+7 hari", 7), ("+30 hari", 30), ("+90 hari", 90), ("Kosongkan", None)] if opsional \
             else [("Hari ini", 0), ("Kemarin", -1)]
         for t, h in opsi:
@@ -579,12 +814,11 @@ class TanggalField(Kolom):
 # ----------------------------------------------------------------------
 # APLIKASI UTAMA
 # ----------------------------------------------------------------------
-GAYA = {
-    "utama": (C_PRIMER, PUTIH),
-    "hijau": (C_HIJAU, PUTIH),
-    "bahaya": (tint(C_MERAH, 0.12), C_MERAH),
-    "netral": (C_FIELD, C_TEKS),
-}
+def gaya(k):
+    return {"utama": (C_PRIMER, fg_on(C_PRIMER)), "hijau": (C_HIJAU, fg_on(C_HIJAU)),
+            "bahaya": (tint(C_MERAH, 0.14), C_MERAH), "netral": (C_FIELD, C_TEKS)}[k]
+
+
 TABS = [("ringkasan", "Beranda"), ("transaksi", "Transaksi"), ("hutang", "Hutang"),
         ("tabungan", "Tabungan"), ("lainnya", "Menu")]
 
@@ -594,23 +828,32 @@ class Utama(FloatLayout):
         super().__init__(**kw)
         self.app = app
         self.db = DB(os.path.join(app.user_data_dir, "keuangan.db"))
+        pasang_tema(self.db.get("tema", "terang"))
+        self.sembunyi = self.db.get("sembunyi", "0") == "1"
+        self.periode = self.db.get("periode", "bulan")
         self.bulan = date.today().replace(day=1)
         self.filter = "semua"
         self.cari = ""
         self.mode_hutang = "hutang"
+        self.mode_tx = "daftar"
+        self.tab_lap = "labarugi"
         self.layar = ("ringkasan", None)
         self.modals = []
+        self.bangun()
 
+    def bangun(self):
+        self.clear_widgets()
         utama = BoxLayout(orientation="vertical")
         self.header = Header()
-        self.sv = ScrollView(do_scroll_x=False, bar_width=dp(3), bar_color=(*C_PRIMER[:3], 0.5))
+        self.sv = ScrollView(do_scroll_x=False, bar_width=dp(3),
+                             bar_color=(C_PRIMER[0], C_PRIMER[1], C_PRIMER[2], 0.5))
         self.box = Kolom(padding=[dp(14), dp(14), dp(14), dp(110)], spacing=dp(12))
         self.sv.add_widget(self.box)
-        nav = Lapisan(orientation="horizontal", size_hint_y=None, height=dp(62), warna=PUTIH,
-                      garis=True, padding=[dp(6), dp(4)])
+        nav = Lapisan(orientation="horizontal", size_hint_y=None, height=dp(62), warna=C_CARD,
+                      garis=True, padding=[dp(4), dp(2)])
         self.nav_items = {}
         for kode, teks in TABS:
-            n = NavItem(teks)
+            n = NavItem(kode, teks)
             n.bind(on_release=lambda i, k=kode: self.buka(k))
             nav.add_widget(n)
             self.nav_items[kode] = n
@@ -618,7 +861,6 @@ class Utama(FloatLayout):
         utama.add_widget(self.sv)
         utama.add_widget(nav)
         self.add_widget(utama)
-
         self.fab = Fab()
         self.fab.bind(on_release=lambda *a: self.menu_tambah())
         self.add_widget(self.fab)
@@ -628,6 +870,28 @@ class Utama(FloatLayout):
 
     def _pos_fab(self, *a):
         self.fab.pos = (self.width - dp(76), dp(62) + dp(16))
+
+    # ---------- pengaturan ----------
+    def ganti_tema(self):
+        nama = "gelap" if TEMA_AKTIF == "terang" else "terang"
+        self.db.put("tema", nama)
+        pasang_tema(nama)
+        for m in list(self.modals):
+            m.dismiss()
+        self.bangun()
+
+    def toggle_sembunyi(self):
+        self.sembunyi = not self.sembunyi
+        self.db.put("sembunyi", "1" if self.sembunyi else "0")
+        self.refresh()
+
+    def set_periode(self, kode):
+        self.periode = kode
+        self.db.put("periode", kode)
+        self.refresh()
+
+    def rpm(self, v):
+        return "Rp ••••••" if self.sembunyi else rp(v)
 
     # ---------- navigasi ----------
     def buka(self, kode, sub=None):
@@ -646,24 +910,29 @@ class Utama(FloatLayout):
             n.aktif = (k == kode)
         self.fab.opacity = 1 if (sub is None and kode != "lainnya") else 0
         self.fab.disabled = self.fab.opacity == 0
+        t = date.today()
+        tema_aksi = ("Gelap" if TEMA_AKTIF == "terang" else "Terang", self.ganti_tema)
         if sub == "anggaran":
-            self.header.set("Anggaran Bulanan", lambda: self.buka("lainnya"))
+            self.header.set("Anggaran Bulanan", lambda: self.buka("lainnya"), "Batas pengeluaran per kategori")
             self.s_anggaran()
         elif sub == "laporan":
-            self.header.set("Laporan Keuangan", lambda: self.buka("lainnya"))
+            self.header.set("Laporan Keuangan", lambda: self.buka("lainnya"), "Laba Rugi, Neraca & Grafik")
             self.s_laporan()
         else:
-            judul = {"ringkasan": "Catatan Keuangan", "transaksi": "Transaksi",
-                     "hutang": "Hutang & Piutang", "tabungan": "Rencana Tabungan",
-                     "lainnya": "Menu"}[kode]
-            self.header.set(judul)
+            judul = {"ringkasan": ("Dashboard", "%s, %d %s %d" % (HARI[t.weekday()], t.day, BULAN[t.month - 1], t.year)),
+                     "transaksi": ("Transaksi", "Daftar & Buku Kas"),
+                     "hutang": ("Hutang & Piutang", "Pantau kewajiban dan tagihan"),
+                     "tabungan": ("Rencana Tabungan", "Capai target keuangan Anda"),
+                     "lainnya": ("Menu", "Pengaturan & laporan")}[kode]
+            self.header.set(judul[0], None, judul[1], tema_aksi if kode == "ringkasan" else None)
             getattr(self, "s_" + kode)()
         if reset:
             self.sv.scroll_y = 1
+        self.box.opacity = 0
+        Animation(opacity=1, d=0.25).start(self.box)
 
     def geser(self, n):
-        m = self.bulan.month - 1 + n
-        self.bulan = date(self.bulan.year + m // 12, m % 12 + 1, 1)
+        self.bulan = awal_bulan(self.bulan, n)
         self.refresh()
 
     def tambah(self, w):
@@ -671,12 +940,21 @@ class Utama(FloatLayout):
         return w
 
     def seksi(self, teks):
-        self.tambah(Lbl(teks, 15, C_TEKS, True))
+        self.tambah(Lbl(teks, 13, C_ABU, True))
+
+    def chips(self, pilihan, aktif, fn):
+        row = BoxLayout(size_hint_y=None, height=dp(36), spacing=dp(6))
+        for kode, teks in pilihan:
+            a = kode == aktif
+            b = Tombol(teks, warna=C_PRIMER if a else C_CARD, fg=fg_on(C_PRIMER) if a else C_ABU, kecil=True)
+            b.bind(on_release=lambda i, kd=kode: fn(kd))
+            row.add_widget(b)
+        return row
 
     # ---------- modal ----------
     def modal(self, isi, anchor="center", ukuran=(0.92, None), luar=True):
         mv = ModalView(size_hint=ukuran, auto_dismiss=luar, background="", background_color=(0, 0, 0, 0),
-                       overlay_color=(0, 0, 0, 0.45), anchor_y=anchor)
+                       overlay_color=(0, 0, 0, 0.5), anchor_y=anchor)
         mv.add_widget(isi)
         if ukuran[1] is None:
             mv.height = isi.height
@@ -723,8 +1001,8 @@ class Utama(FloatLayout):
         k = Kartu(pad=[18, 18, 18, 24], radius=[0, 0, dp(24), dp(24)], shadow=False, spacing=dp(10))
         k.add_widget(Lbl(judul, 16, bold=True))
         mv = self.modal(k, "bottom", (1, None))
-        for teks, gaya, fn in opsi:
-            bg, fg = GAYA[gaya]
+        for teks, g, fn in opsi:
+            bg, fg = gaya(g)
             b = Tombol(teks, warna=bg, fg=fg)
 
             def klik(i, fn=fn):
@@ -751,7 +1029,6 @@ class Utama(FloatLayout):
         hd.set(judul, lambda: mv.dismiss())
 
     def tombol_kembali_android(self):
-        """Dipanggil saat tombol Back ditekan. True = sudah ditangani."""
         if self.modals:
             self.modals[-1].dismiss()
             return True
@@ -802,7 +1079,7 @@ class Utama(FloatLayout):
             if fl.get("h"):
                 isi.add_widget(Lbl(fl["h"], 12, C_ABU))
         sv.add_widget(isi)
-        bawah = Lapisan(orientation="vertical", size_hint_y=None, height=dp(76), warna=PUTIH, garis=True,
+        bawah = Lapisan(orientation="vertical", size_hint_y=None, height=dp(76), warna=C_CARD, garis=True,
                         padding=[dp(16), dp(12)])
         tmb = Tombol("SIMPAN", warna=C_PRIMER)
         bawah.add_widget(tmb)
@@ -824,93 +1101,212 @@ class Utama(FloatLayout):
 
         tmb.bind(on_release=aksi)
 
+    # ---------- data bantu ----------
+    def jml(self, tipe, a, b):
+        return self.db.val("SELECT SUM(jumlah) FROM transaksi WHERE tipe=? AND tanggal>=? AND tanggal<=?",
+                           (tipe, a, b))
+
+    def posisi(self):
+        d = self.db
+        kas = d.val("SELECT SUM(jumlah) FROM transaksi WHERE tipe='masuk'") - \
+            d.val("SELECT SUM(jumlah) FROM transaksi WHERE tipe='keluar'")
+        tab = d.val("SELECT SUM(terkumpul) FROM tabungan")
+        piut = d.val("SELECT SUM(jumlah-terbayar) FROM hutang WHERE jenis='piutang' AND jumlah>terbayar")
+        hut = d.val("SELECT SUM(jumlah-terbayar) FROM hutang WHERE jenis='hutang' AND jumlah>terbayar")
+        return kas, tab, piut, hut
+
+    def data_tren(self, akhir):
+        out = []
+        for i in range(5, -1, -1):
+            b = awal_bulan(akhir, -i)
+            a, z = b.isoformat(), akhir_bulan(b).isoformat()
+            out.append((BULAN[b.month - 1][:3], self.jml("masuk", a, z), self.jml("keluar", a, z),
+                        bulan_label(b)))
+        return out
+
+    def w_arus(self, akhir, judul="Arus Kas 6 Bulan"):
+        data = self.data_tren(akhir)
+        k = Kartu(pad=14, spacing=dp(6))
+        k.add_widget(Lbl(judul, 15, bold=True))
+        tip = Lbl("", 12, C_ABU)
+        k.add_widget(tip)
+
+        def pilih(i):
+            tip.text = "%s  |  Masuk %s  |  Keluar %s" % (data[i][3], rp(data[i][1]), rp(data[i][2]))
+
+        chart = ChartArus(data, on_pilih=pilih)
+        k.add_widget(chart)
+        lab = BoxLayout(size_hint_y=None, height=dp(16))
+        for d in data:
+            lab.add_widget(Label(text=d[0], font_size=sp(10), color=C_ABU))
+        k.add_widget(lab)
+        lg = BoxLayout(size_hint_y=None, height=dp(20), spacing=dp(6))
+        lg.add_widget(Dot(C_HIJAU, pos_hint={"center_y": 0.5}))
+        lg.add_widget(Lbl("Pemasukan", 11, C_ABU, size_hint_y=1))
+        lg.add_widget(Dot(C_MERAH, pos_hint={"center_y": 0.5}))
+        lg.add_widget(Lbl("Pengeluaran", 11, C_ABU, size_hint_y=1))
+        k.add_widget(lg)
+        chart.sel = len(data) - 1
+        pilih(len(data) - 1)
+        return k
+
+    def w_donat(self, rows, judul, ket_total):
+        """rows = [(nama, nilai)] ; legenda bisa disentuh."""
+        total = sum(v for n, v in rows)
+        k = Kartu(pad=14, spacing=dp(6))
+        k.add_widget(Lbl(judul, 15, bold=True))
+        if not rows or total <= 0:
+            k.add_widget(Lbl("Tidak ada data pada periode ini.", 13, C_ABU))
+            return k
+        if len(rows) > 6:
+            rows = rows[:5] + [("Lainnya", sum(v for n, v in rows[5:]))]
+        warna = [PALET[i % len(PALET)] for i in range(len(rows))]
+        tengah0 = "%s\n%s" % (ket_total, rp(total))
+        legend = Kolom(spacing=dp(2))
+        donat = Donat([(v, warna[i]) for i, (n, v) in enumerate(rows)], tengah0)
+
+        def isi_legend():
+            legend.clear_widgets()
+            for i, (n, v) in enumerate(rows):
+                aktif = donat.sel == i
+                r = BarisTap(orientation="horizontal", size_hint_y=None, height=dp(34), spacing=dp(8),
+                             padding=[dp(8), 0], warna=tint(warna[i], 0.16) if aktif else C_CARD)
+                r.add_widget(Dot(warna[i], pos_hint={"center_y": 0.5}))
+                r.add_widget(Lbl(n, 13, C_TEKS, aktif, size_hint_y=1))
+                pc = Label(text="%s  (%.0f%%)" % (rp(v), v / total * 100), font_size=sp(12), bold=True,
+                           color=C_TEKS, size_hint=(None, 1))
+                pc.bind(texture_size=lambda inst, vv: setattr(inst, "width", vv[0] + dp(2)))
+                r.add_widget(pc)
+                r.bind(on_release=lambda inst, i=i: pilih(i))
+                legend.add_widget(r)
+
+        def pilih(i):
+            donat.sel = -1 if donat.sel == i else i
+            if donat.sel < 0:
+                donat.lbl.text = tengah0
+            else:
+                n, v = rows[i]
+                donat.lbl.text = "%s\n%.0f%%\n%s" % (n, v / total * 100, rp(v))
+            isi_legend()
+
+        donat.on_pilih = pilih
+        k.add_widget(donat)
+        k.add_widget(legend)
+        isi_legend()
+        return k
+
     # ==================================================================
-    # BERANDA
+    # DASHBOARD
     # ==================================================================
+    def kpi(self, judul, nilai, warna, dl, fmt=None):
+        k = Kartu(pad=[14, 12, 14, 12], spacing=dp(3))
+        top = BoxLayout(size_hint_y=None, height=dp(16), spacing=dp(6))
+        top.add_widget(Dot(warna, pos_hint={"center_y": 0.5}))
+        top.add_widget(Lbl(judul, 11, C_ABU, True, size_hint_y=1))
+        k.add_widget(top)
+        k.add_widget(Angka(nilai, 17, warna, True, fmt or self.rpm, animasi=not self.sembunyi))
+        k.add_widget(Lbl(dl[0], 10, dl[1]))
+        return k
+
     def s_ringkasan(self):
         d = self.db
-        hari = date.today()
-        bl = hari.strftime("%Y-%m")
-        tm = d.val("SELECT SUM(jumlah) FROM transaksi WHERE tipe='masuk'")
-        tk_ = d.val("SELECT SUM(jumlah) FROM transaksi WHERE tipe='keluar'")
-        m = d.val("SELECT SUM(jumlah) FROM transaksi WHERE tipe='masuk' AND substr(tanggal,1,7)=?", (bl,))
-        k = d.val("SELECT SUM(jumlah) FROM transaksi WHERE tipe='keluar' AND substr(tanggal,1,7)=?", (bl,))
+        a, b, pa, pb = rentang(self.periode)
+        m, kl = self.jml("masuk", a, b), self.jml("keluar", a, b)
+        pm = self.jml("masuk", pa, pb) if pa else None
+        pk = self.jml("keluar", pa, pb) if pa else None
+        kas, tab, piut, hut = self.posisi()
+        nw = kas + tab + piut - hut
 
-        hero = Kartu(grad=(C_PRIMER, C_UNGU), pad=20, spacing=dp(4))
-        hero.add_widget(Lbl("Total Saldo", 13, (1, 1, 1, 0.8)))
-        hero.add_widget(Lbl(rp(tm - tk_), 30, PUTIH, True))
-        hero.add_widget(Widget(size_hint_y=None, height=dp(8)))
-        hero.add_widget(Lbl("Bulan " + bulan_label(hari), 12, (1, 1, 1, 0.75)))
-        row = BoxLayout(size_hint_y=None, height=dp(66), spacing=dp(10))
-        for judul, nilai in (("Pemasukan", m), ("Pengeluaran", k)):
-            c = Kartu(warna=(1, 1, 1, 0.17), shadow=False, pad=12, radius=14, spacing=dp(2))
-            c.add_widget(Lbl(judul, 12, (1, 1, 1, 0.85)))
-            c.add_widget(Lbl(rp(nilai), 15, PUTIH, True))
+        self.tambah(self.chips(PERIODE, self.periode, self.set_periode))
+
+        hero = KartuTap(grad=(C_HERO1, C_HERO2), garis=False, pad=18, spacing=dp(2), radius=20)
+        hero.bind(on_release=lambda *x: self.toggle_sembunyi())
+        hero.add_widget(Lbl("KEKAYAAN BERSIH", 11, (1, 1, 1, 0.75), True))
+        hero.add_widget(Angka(nw, 30, PUTIH, True, self.rpm, animasi=not self.sembunyi))
+        hero.add_widget(Lbl("Kas + Tabungan + Piutang - Hutang  |  ketuk untuk %s" % (
+            "menampilkan" if self.sembunyi else "menyembunyikan"), 10, (1, 1, 1, 0.65)))
+        hero.add_widget(Widget(size_hint_y=None, height=dp(6)))
+        row = BoxLayout(size_hint_y=None, height=dp(62), spacing=dp(8))
+        for jd, nl in (("Saldo Kas", kas), ("Tabungan", tab), ("Piutang - Hutang", piut - hut)):
+            c = Kartu(warna=(1, 1, 1, 0.13), shadow=False, garis=False, pad=10, radius=12, spacing=dp(2))
+            c.add_widget(Lbl(jd, 10, (1, 1, 1, 0.8)))
+            c.add_widget(Lbl(self.rpm(nl) if not self.sembunyi else "••••", 12, PUTIH, True))
             row.add_widget(c)
         hero.add_widget(row)
         self.tambah(hero)
 
+        qa = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(10))
+        b1 = Tombol("+ Pemasukan", warna=tint(C_HIJAU, 0.16), fg=C_HIJAU)
+        b2 = Tombol("+ Pengeluaran", warna=tint(C_MERAH, 0.16), fg=C_MERAH)
+        b1.bind(on_release=lambda *x: self.f_transaksi("masuk"))
+        b2.bind(on_release=lambda *x: self.f_transaksi("keluar"))
+        qa.add_widget(b1)
+        qa.add_widget(b2)
+        self.tambah(qa)
+
+        lbl = dict(PERIODE)[self.periode]
+        self.seksi("Ringkasan " + lbl.upper())
         grid = GridLayout(cols=2, spacing=dp(10), size_hint_y=None)
         grid.bind(minimum_height=grid.setter("height"))
-        for teks, c, fn in (("+ Pemasukan", C_HIJAU, lambda: self.f_transaksi("masuk")),
-                            ("+ Pengeluaran", C_MERAH, lambda: self.f_transaksi("keluar")),
-                            ("+ Hutang / Piutang", C_ORANYE, lambda: self.f_hutang()),
-                            ("+ Tabungan", C_BIRU, lambda: self.f_tabungan())):
-            b = Tombol(teks, warna=tint(c, 0.14), fg=c)
-            b.bind(on_release=lambda i, fn=fn: fn())
-            grid.add_widget(b)
+        grid.add_widget(self.kpi("Pemasukan", m, C_HIJAU, delta(m, pm, True)))
+        grid.add_widget(self.kpi("Pengeluaran", kl, C_MERAH, delta(kl, pk, False)))
+        grid.add_widget(self.kpi("Arus Kas Bersih", m - kl, C_HIJAU if m >= kl else C_MERAH,
+                                 delta(m - kl, (pm - pk) if pa else None, True)))
+        rasio = (m - kl) / m * 100 if m > 0 else 0
+        prasio = ((pm - pk) / pm * 100) if pa and pm else None
+        grid.add_widget(self.kpi("Rasio Tabungan", rasio, C_BIRU,
+                                 delta(rasio, prasio, True) if prasio is not None else ("", C_ABU),
+                                 fmt=lambda v: "%.0f%%" % v))
         self.tambah(grid)
 
-        sh = d.val("SELECT SUM(jumlah-terbayar) FROM hutang WHERE jenis='hutang' AND jumlah>terbayar")
-        sp_ = d.val("SELECT SUM(jumlah-terbayar) FROM hutang WHERE jenis='piutang' AND jumlah>terbayar")
-        tab = d.val("SELECT SUM(terkumpul) FROM tabungan")
-        c = Kartu(pad=16, spacing=dp(4))
-        c.add_widget(Lbl("Posisi Keuangan", 15, bold=True))
-        c.add_widget(Baris("Hutang saya", rp(sh), C_MERAH))
-        c.add_widget(Baris("Piutang", rp(sp_), C_HIJAU))
-        c.add_widget(Baris("Total tabungan", rp(tab), C_PRIMER))
-        self.tambah(c)
+        self.tambah(self.w_arus(date.today().replace(day=1)))
+
+        rows = [(r["kategori"], r["t"]) for r in d.q(
+            "SELECT kategori, SUM(jumlah) t FROM transaksi WHERE tipe='keluar' AND tanggal>=? AND tanggal<=? "
+            "GROUP BY kategori ORDER BY t DESC", (a, b))]
+        self.tambah(self.w_donat(rows, "Pengeluaran per Kategori", "Total"))
+
+        bl = date.today().strftime("%Y-%m")
+        ang = d.q("SELECT * FROM anggaran ORDER BY kategori")
+        if ang:
+            c = Kartu(pad=14, spacing=dp(3))
+            c.add_widget(Lbl("Anggaran Bulan Ini", 15, bold=True))
+            for r in ang:
+                pakai = d.val("SELECT SUM(jumlah) FROM transaksi WHERE tipe='keluar' AND kategori=? "
+                              "AND substr(tanggal,1,7)=?", (r["kategori"], bl))
+                pct = pakai / r["batas"] if r["batas"] else 0
+                w = C_HIJAU if pct < 0.8 else (C_ORANYE if pct <= 1 else C_MERAH)
+                c.add_widget(Baris(r["kategori"], "%.0f%%" % (pct * 100), w))
+                c.add_widget(Bar(pct, w))
+            self.tambah(c)
 
         pesan = []
-        batas = (hari + timedelta(days=7)).isoformat()
+        batas = (date.today() + timedelta(days=7)).isoformat()
         for r in d.q("SELECT * FROM hutang WHERE jumlah>terbayar AND jatuh_tempo<>'' AND jatuh_tempo<=? "
                      "ORDER BY jatuh_tempo", (batas,)):
             jenis = "Hutang ke" if r["jenis"] == "hutang" else "Piutang dari"
-            st = "TERLAMBAT" if r["jatuh_tempo"] < hari.isoformat() else "segera"
+            st = "TERLAMBAT" if r["jatuh_tempo"] < date.today().isoformat() else "segera"
             pesan.append("%s %s: %s, jatuh tempo %s (%s)" % (
                 jenis, r["nama"], rp(r["jumlah"] - r["terbayar"]), fmt_tgl(r["jatuh_tempo"]), st))
-        for a in d.q("SELECT * FROM anggaran"):
-            pakai = d.val("SELECT SUM(jumlah) FROM transaksi WHERE tipe='keluar' AND kategori=? "
-                          "AND substr(tanggal,1,7)=?", (a["kategori"], bl))
-            if a["batas"] > 0 and pakai >= 0.8 * a["batas"]:
-                pesan.append("Anggaran %s terpakai %.0f%% (%s dari %s)" % (
-                    a["kategori"], pakai / a["batas"] * 100, rp(pakai), rp(a["batas"])))
         if pesan:
-            c = Kartu(warna=tint(C_ORANYE, 0.14), shadow=False, pad=16, spacing=dp(6))
-            c.add_widget(Lbl("Perhatian", 15, hx("#B45309"), True))
+            c = Kartu(warna=tint(C_ORANYE, 0.15), shadow=False, pad=14, spacing=dp(6))
+            c.add_widget(Lbl("Perlu Perhatian", 15, C_ORANYE, True))
             for p in pesan:
-                c.add_widget(Lbl("- " + p, 13, hx("#78350F")))
-            self.tambah(c)
-
-        top = d.q("SELECT kategori, SUM(jumlah) t FROM transaksi WHERE tipe='keluar' AND substr(tanggal,1,7)=? "
-                  "GROUP BY kategori ORDER BY t DESC LIMIT 3", (bl,))
-        if top:
-            c = Kartu(pad=16, spacing=dp(2))
-            c.add_widget(Lbl("Pengeluaran terbesar bulan ini", 15, bold=True))
-            for r in top:
-                c.add_widget(Baris(r["kategori"], rp(r["t"])))
-                c.add_widget(Bar(r["t"] / k if k else 0, warna_kat(r["kategori"])))
+                c.add_widget(Lbl("- " + p, 13, C_TEKS))
             self.tambah(c)
 
         terakhir = d.q("SELECT * FROM transaksi ORDER BY tanggal DESC, id DESC LIMIT 5")
+        self.seksi("TRANSAKSI TERAKHIR")
         if terakhir:
-            self.seksi("Transaksi terakhir")
             for r in terakhir:
                 self.tambah(self.baris_tx(r))
+            lh = Tombol("Lihat semua transaksi", warna=tint(C_PRIMER), fg=C_PRIMER, kecil=True)
+            lh.bind(on_release=lambda *x: self.buka("transaksi"))
+            self.tambah(lh)
         else:
             c = Kartu(pad=20)
             c.add_widget(Lbl("Selamat datang!", 17, bold=True))
-            c.add_widget(Lbl("Mulai dengan menekan tombol + untuk mencatat pemasukan atau pengeluaran pertama Anda.",
+            c.add_widget(Lbl("Mulai dengan menekan tombol + untuk mencatat pemasukan atau pengeluaran pertama.",
                              14, C_ABU))
             self.tambah(c)
 
@@ -953,39 +1349,49 @@ class Utama(FloatLayout):
         b.bind(on_release=lambda *x: self.geser(1))
         k.add_widget(a)
         k.add_widget(Label(text=bulan_label(self.bulan), font_size=sp(16), bold=True, color=C_TEKS,
-                           size_hint=(1, None), height=dp(38)))
+                           size_hint=(1, None), height=dp(36)))
         k.add_widget(b)
         return k
 
     def s_transaksi(self):
-        d = self.db
         bl = self.bulan.strftime("%Y-%m")
+        a, z = self.bulan.isoformat(), akhir_bulan(self.bulan).isoformat()
         self.tambah(self.w_nav_bulan())
-        m = d.val("SELECT SUM(jumlah) FROM transaksi WHERE tipe='masuk' AND substr(tanggal,1,7)=?", (bl,))
-        k = d.val("SELECT SUM(jumlah) FROM transaksi WHERE tipe='keluar' AND substr(tanggal,1,7)=?", (bl,))
-        row = BoxLayout(size_hint_y=None, height=dp(70), spacing=dp(8))
-        for judul, nilai, c in (("Masuk", m, C_HIJAU), ("Keluar", k, C_MERAH),
-                                ("Selisih", m - k, C_HIJAU if m >= k else C_MERAH)):
+        m, kl = self.jml("masuk", a, z), self.jml("keluar", a, z)
+        row = BoxLayout(size_hint_y=None, height=dp(66), spacing=dp(8))
+        for judul, nilai, c in (("Masuk", m, C_HIJAU), ("Keluar", kl, C_MERAH),
+                                ("Selisih", m - kl, C_HIJAU if m >= kl else C_MERAH)):
             s = Kartu(pad=10, spacing=dp(2))
-            s.add_widget(Lbl(judul, 12, C_ABU, rata="center"))
+            s.add_widget(Lbl(judul, 11, C_ABU, rata="center"))
             s.add_widget(Lbl(rp(nilai), 12, c, True, rata="center"))
             row.add_widget(s)
         self.tambah(row)
 
-        ch = BoxLayout(size_hint_y=None, height=dp(38), spacing=dp(8))
-        for kode, teks in (("semua", "Semua"), ("masuk", "Pemasukan"), ("keluar", "Pengeluaran")):
-            aktif = self.filter == kode
-            b = Tombol(teks, warna=C_PRIMER if aktif else C_FIELD, fg=PUTIH if aktif else C_TEKS, kecil=True)
-            b.bind(on_release=lambda i, kd=kode: self.set_filter(kd))
-            ch.add_widget(b)
-        self.tambah(ch)
+        self.tambah(self.chips([("daftar", "Daftar"), ("buku", "Buku Kas")], self.mode_tx, self.set_mode_tx))
+        bt = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(10))
+        b1 = Tombol("+ Pemasukan", warna=C_HIJAU)
+        b2 = Tombol("+ Pengeluaran", warna=C_MERAH)
+        b1.bind(on_release=lambda *x: self.f_transaksi("masuk"))
+        b2.bind(on_release=lambda *x: self.f_transaksi("keluar"))
+        bt.add_widget(b1)
+        bt.add_widget(b2)
+        self.tambah(bt)
 
+        if self.mode_tx == "buku":
+            self.tambah(self.w_buku(bl))
+            return
+        self.tambah(self.chips([("semua", "Semua"), ("masuk", "Pemasukan"), ("keluar", "Pengeluaran")],
+                               self.filter, self.set_filter))
         e = Entry(hint_text="Cari kategori atau catatan...", text=self.cari)
         e.bind(text=self._cari_berubah)
         self.tambah(e)
         self.daftar = Kolom(spacing=dp(10))
         self.tambah(self.daftar)
         self.isi_tx()
+
+    def set_mode_tx(self, kode):
+        self.mode_tx = kode
+        self.refresh()
 
     def set_filter(self, kode):
         self.filter = kode
@@ -1014,6 +1420,64 @@ class Utama(FloatLayout):
             self.daftar.add_widget(c)
         for r in rows[:200]:
             self.daftar.add_widget(self.baris_tx(r))
+
+    # ----- Buku Kas (gaya akuntan: debit / kredit / saldo berjalan) -----
+    def sel(self, teks, lebar, size=11, warna=None, bold=False, rata="right"):
+        lb = Label(text=teks, font_size=sp(size), color=warna or C_TEKS, bold=bold, halign=rata, valign="middle",
+                   shorten=True, shorten_from="right", size_hint=(None, 1) if lebar else (1, 1))
+        if lebar:
+            lb.width = dp(lebar)
+        lb.bind(size=lambda i, s: setattr(i, "text_size", s))
+        return lb
+
+    def baris_buku(self, tgl, ket, sub, debit, kredit, bg, tap=None, bold=False, warna_teks=None, tinggi=46):
+        cls = BarisTap if tap else Lapisan
+        r = cls(orientation="horizontal", size_hint_y=None, height=dp(tinggi), warna=bg,
+                padding=[dp(6), dp(2)], spacing=dp(2))
+        r.add_widget(self.sel(tgl, 38, 11, warna_teks or C_ABU, False, "left"))
+        mid = BoxLayout(orientation="vertical", size_hint_x=1)
+        mid.add_widget(self.sel(ket, 0, 12, warna_teks, True, "left"))
+        if sub:
+            mid.add_widget(self.sel(sub, 0, 10, warna_teks or C_ABU, False, "left"))
+        r.add_widget(mid)
+        r.add_widget(self.sel(debit, 74, 11, warna_teks or C_HIJAU, bold))
+        r.add_widget(self.sel(kredit, 74, 11, warna_teks or C_MERAH, bold))
+        if tap:
+            r.bind(on_release=lambda *x: tap())
+        return r
+
+    def w_buku(self, bl):
+        awal = self.bulan.isoformat()
+        sa = self.db.val("SELECT SUM(jumlah) FROM transaksi WHERE tipe='masuk' AND tanggal<?", (awal,)) - \
+            self.db.val("SELECT SUM(jumlah) FROM transaksi WHERE tipe='keluar' AND tanggal<?", (awal,))
+        rows = self.db.q("SELECT * FROM transaksi WHERE substr(tanggal,1,7)=? ORDER BY tanggal, id", (bl,))
+        k = Kartu(pad=1, spacing=0, radius=10)
+        k.add_widget(self.baris_buku("Tgl", "Keterangan", "", "Debit", "Kredit", C_HDR1, None, True, PUTIH, 34))
+        zebra = (C_FIELD[0], C_FIELD[1], C_FIELD[2], 0.55)
+        k.add_widget(self.baris_buku("", "Saldo awal", "", angka(sa) if sa >= 0 else "",
+                                     angka(-sa) if sa < 0 else "", C_CARD, None, True, None, 38))
+        sd = sk = 0.0
+        saldo = sa
+        for i, r in enumerate(rows):
+            masuk = r["tipe"] == "masuk"
+            saldo += r["jumlah"] if masuk else -r["jumlah"]
+            if masuk:
+                sd += r["jumlah"]
+            else:
+                sk += r["jumlah"]
+            sub = ((r["catatan"] + "  |  ") if r["catatan"] else "") + "Saldo " + angka(saldo)
+            k.add_widget(self.baris_buku(r["tanggal"][8:10] + "/" + r["tanggal"][5:7], r["kategori"], sub,
+                                         angka(r["jumlah"]) if masuk else "", "" if masuk else angka(r["jumlah"]),
+                                         C_CARD if i % 2 == 0 else zebra,
+                                         tap=lambda r=r: self.opsi_tx(r)))
+        k.add_widget(Garis(2))
+        k.add_widget(self.baris_buku("", "Jumlah", "", angka(sd), angka(sk), C_CARD, None, True, None, 38))
+        akh = sa + sd - sk
+        k.add_widget(self.baris_buku("", "Saldo akhir", "Saldo awal + Debit - Kredit", angka(akh) if akh >= 0 else "",
+                                     angka(-akh) if akh < 0 else "", tint(C_PRIMER, 0.12), None, True, None, 46))
+        if not rows:
+            k.add_widget(Lbl("Belum ada transaksi pada bulan ini.", 12, C_ABU, rata="center"))
+        return k
 
     def f_transaksi(self, tipe, row=None):
         masuk = tipe == "masuk"
@@ -1061,20 +1525,16 @@ class Utama(FloatLayout):
     def s_hutang(self):
         d = self.db
         mode = self.mode_hutang
-        t = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(8))
-        for kode, teks in (("hutang", "Hutang Saya"), ("piutang", "Piutang")):
-            aktif = mode == kode
-            b = Tombol(teks, warna=C_PRIMER if aktif else C_FIELD, fg=PUTIH if aktif else C_TEKS)
-            b.bind(on_release=lambda i, kd=kode: self.set_mode(kd))
-            t.add_widget(b)
-        self.tambah(t)
-
+        self.tambah(self.chips([("hutang", "Hutang Saya"), ("piutang", "Piutang")], mode, self.set_mode))
         sisa = d.val("SELECT SUM(jumlah-terbayar) FROM hutang WHERE jenis=? AND jumlah>terbayar", (mode,))
-        warna = (C_MERAH, hx("#F97316")) if mode == "hutang" else (C_HIJAU, C_TOSCA)
-        hero = Kartu(grad=warna, pad=20, spacing=dp(2))
-        hero.add_widget(Lbl("Uang yang harus saya bayar" if mode == "hutang"
-                            else "Uang saya yang belum dikembalikan", 13, (1, 1, 1, 0.85)))
-        hero.add_widget(Lbl(rp(sisa), 28, PUTIH, True))
+        total = d.val("SELECT SUM(jumlah) FROM hutang WHERE jenis=?", (mode,))
+        warna = (hx("#7F1D1D"), C_MERAH) if mode == "hutang" else (hx("#065F46"), C_HIJAU)
+        hero = Kartu(grad=warna, garis=False, pad=18, spacing=dp(2), radius=20)
+        hero.add_widget(Lbl("UANG YANG HARUS SAYA BAYAR" if mode == "hutang" else "UANG SAYA YANG BELUM KEMBALI",
+                            11, (1, 1, 1, 0.8), True))
+        hero.add_widget(Angka(sisa, 28, PUTIH, True))
+        hero.add_widget(Lbl("Terlunasi %s dari total %s" % (rp(total - sisa), rp(total)), 11, (1, 1, 1, 0.75)))
+        hero.add_widget(Bar((total - sisa) / total if total else 0, PUTIH))
         self.tambah(hero)
         b = Tombol("+ Tambah " + ("Hutang" if mode == "hutang" else "Piutang"), warna=C_PRIMER)
         b.bind(on_release=lambda *a: self.f_hutang())
@@ -1107,7 +1567,7 @@ class Utama(FloatLayout):
                              12, C_MERAH if telat else C_ABU))
         if r["catatan"]:
             k.add_widget(Lbl(r["catatan"], 12, C_ABU))
-        row = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(8))
+        row = BoxLayout(size_hint_y=None, height=dp(38), spacing=dp(8))
         if not lunas:
             b = Tombol("Bayar" if mode == "hutang" else "Terima", warna=C_HIJAU, kecil=True)
             b.bind(on_release=lambda *a: self.f_bayar(r))
@@ -1159,8 +1619,8 @@ class Utama(FloatLayout):
                 self.db.x("INSERT INTO hutang(jenis,nama,jumlah,terbayar,jatuh_tempo,catatan) VALUES(?,?,?,0,?,?)",
                           (jenis, nama, jml, d["tempo"], d["catatan"].strip()))
                 self.mode_hutang = jenis
-            if not row and self.layar[0] != "hutang":
-                self.layar = ("hutang", None)
+                if self.layar[0] != "hutang":
+                    self.layar = ("hutang", None)
 
         self.form(("Ubah " if row else "Tambah ") + ("Hutang" if jenis == "hutang" else "Piutang"), fields, simpan)
 
@@ -1195,11 +1655,13 @@ class Utama(FloatLayout):
         d = self.db
         total = d.val("SELECT SUM(terkumpul) FROM tabungan")
         target = d.val("SELECT SUM(target) FROM tabungan")
-        hero = Kartu(grad=(C_BIRU, C_PRIMER), pad=20, spacing=dp(2))
-        hero.add_widget(Lbl("Total tabungan", 13, (1, 1, 1, 0.85)))
-        hero.add_widget(Lbl(rp(total), 28, PUTIH, True))
+        hero = Kartu(grad=(C_HERO1, C_TOSCA), garis=False, pad=18, spacing=dp(2), radius=20)
+        hero.add_widget(Lbl("TOTAL TABUNGAN", 11, (1, 1, 1, 0.8), True))
+        hero.add_widget(Angka(total, 28, PUTIH, True))
         if target:
-            hero.add_widget(Lbl("dari target %s" % rp(target), 12, (1, 1, 1, 0.85)))
+            hero.add_widget(Lbl("%.0f%% dari total target %s" % (total / target * 100, rp(target)), 11,
+                                (1, 1, 1, 0.8)))
+            hero.add_widget(Bar(total / target, C_AKSEN))
         self.tambah(hero)
         b = Tombol("+ Buat Target Tabungan", warna=C_PRIMER)
         b.bind(on_release=lambda *a: self.f_tabungan())
@@ -1238,11 +1700,11 @@ class Utama(FloatLayout):
             k.add_widget(Lbl("Tenggat: " + fmt_tgl(r["tenggat"]), 12, C_ABU))
         if r["catatan"]:
             k.add_widget(Lbl(r["catatan"], 12, C_ABU))
-        row = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(8))
+        row = BoxLayout(size_hint_y=None, height=dp(38), spacing=dp(8))
         for teks, w, fn in (("Setor", C_HIJAU, lambda: self.f_setor(r, "setor")),
                             ("Tarik", C_ORANYE, lambda: self.f_setor(r, "tarik")),
                             ("Opsi", C_FIELD, lambda: self.opsi_tabungan(r))):
-            b = Tombol(teks, warna=w, fg=C_TEKS if w == C_FIELD else PUTIH, kecil=True)
+            b = Tombol(teks, warna=w, fg=C_TEKS if w == C_FIELD else None, kecil=True)
             b.bind(on_release=lambda i, fn=fn: fn())
             row.add_widget(b)
         k.add_widget(Widget(size_hint_y=None, height=dp(2)))
@@ -1308,7 +1770,7 @@ class Utama(FloatLayout):
         self.form(("Setor ke " if setor else "Tarik dari ") + r["nama"], fields, simpan)
 
     # ==================================================================
-    # MENU LAINNYA
+    # MENU
     # ==================================================================
     def menu_tambah(self):
         self.sheet("Tambah catatan baru", [
@@ -1319,38 +1781,44 @@ class Utama(FloatLayout):
 
     def s_lainnya(self):
         items = [
-            ("Anggaran Bulanan", "Batasi pengeluaran per kategori", lambda: self.buka("lainnya", "anggaran")),
-            ("Laporan Keuangan", "Grafik per kategori & tren 6 bulan", lambda: self.buka("lainnya", "laporan")),
-            ("Ekspor & Bagikan Data", "CSV untuk Excel / WhatsApp / Email", self.menu_ekspor),
-            ("Backup Database", "Simpan salinan data Anda", self.backup_db),
-            ("Panduan & Tentang", "Cara memakai aplikasi", self.panduan),
-            ("Hapus Semua Data", "Mulai dari nol (tidak bisa dibatalkan)", self.hapus_semua),
+            ("Laporan Keuangan", "Laba Rugi, Neraca, grafik", "", lambda: self.buka("lainnya", "laporan"), C_PRIMER),
+            ("Anggaran Bulanan", "Batasi pengeluaran per kategori", "", lambda: self.buka("lainnya", "anggaran"), C_TOSCA),
+            ("Tema Tampilan", "Ketuk untuk mengganti", "Gelap" if TEMA_AKTIF == "gelap" else "Terang",
+             self.ganti_tema, C_AKSEN),
+            ("Sembunyikan Saldo", "Samarkan angka di Dashboard", "Ya" if self.sembunyi else "Tidak",
+             self.toggle_sembunyi, C_UNGU),
+            ("Ekspor & Bagikan Data", "CSV untuk Excel / WhatsApp / Email", "", self.menu_ekspor, C_HIJAU),
+            ("Backup Database", "Simpan salinan data Anda", "", self.backup_db, C_BIRU),
+            ("Panduan & Tentang", "Cara memakai aplikasi", "", self.panduan, C_ABU),
+            ("Hapus Semua Data", "Mulai dari nol (tidak bisa dibatalkan)", "", self.hapus_semua, C_MERAH),
         ]
-        for judul, ket, fn in items:
-            k = KartuTap(orientation="horizontal", pad=16, spacing=dp(10))
+        for judul, ket, nilai, fn, w in items:
+            k = KartuTap(orientation="horizontal", pad=14, spacing=dp(12))
+            k.add_widget(Avatar(judul, w, pos_hint={"center_y": 0.5}))
             kol = Kolom(spacing=dp(2))
-            bahaya = judul.startswith("Hapus")
-            kol.add_widget(Lbl(judul, 15, C_MERAH if bahaya else C_TEKS, True))
+            kol.add_widget(Lbl(judul, 15, C_MERAH if judul.startswith("Hapus") else C_TEKS, True))
             kol.add_widget(Lbl(ket, 12, C_ABU))
             k.add_widget(kol)
-            pan = Label(text=">", font_size=sp(20), bold=True, color=C_ABU, size_hint=(None, None),
-                        size=(dp(20), dp(20)), pos_hint={"center_y": 0.5})
-            k.add_widget(pan)
+            kanan = Label(text=nilai if nilai else ">", font_size=sp(13), bold=True, color=C_PRIMER if nilai else C_ABU,
+                          size_hint=(None, None), size=(dp(56), dp(20)), pos_hint={"center_y": 0.5})
+            k.add_widget(kanan)
             k.bind(on_release=lambda i, fn=fn: fn())
             self.tambah(k)
 
     def panduan(self):
         self.halaman_info("Panduan & Tentang", [
-            ("Beranda", "Lihat saldo, ringkasan bulan ini, hutang, piutang, tabungan, dan peringatan jatuh tempo / anggaran. "
-                        "Tombol + di kanan bawah untuk menambah catatan baru dengan cepat."),
-            ("Transaksi", "Catat pemasukan & pengeluaran. Ketuk satu transaksi untuk mengubah atau menghapus. "
-                          "Gunakan tombol < > untuk pindah bulan."),
+            ("Dashboard", "Pilih periode (Bulan Ini, 3 Bulan, Tahun Ini, Semua). Ketuk kartu Kekayaan Bersih untuk "
+                          "menyembunyikan angka. Sentuh grafik untuk melihat nilai tiap bulan, dan sentuh irisan donat "
+                          "atau daftar kategori untuk menyorotnya."),
+            ("Transaksi & Buku Kas", "Daftar menampilkan kartu transaksi. Buku Kas menampilkan format akuntansi: "
+                                     "Debit (uang masuk), Kredit (uang keluar) dan saldo berjalan. Ketuk baris untuk "
+                                     "mengubah atau menghapus."),
             ("Hutang & Piutang", "Hutang Saya = yang harus Anda bayar. Piutang = uang Anda yang dipinjam orang lain. "
-                                 "Tekan Bayar/Terima untuk mencatat cicilan; bisa sekaligus dicatat ke transaksi."),
-            ("Tabungan", "Buat target, lalu Setor/Tarik. Aplikasi menghitung saran jumlah nabung per bulan jika tenggat diisi."),
-            ("Anggaran & Laporan", "Atur batas pengeluaran per kategori. Laporan menampilkan grafik donat dan tren 6 bulan."),
-            ("Data Anda", "Data tersimpan di HP ini. Jika aplikasi dihapus, data ikut hilang, "
-                          "jadi rutin gunakan Ekspor & Bagikan Data atau Backup Database."),
+                                 "Tekan Bayar/Terima untuk mencatat cicilan."),
+            ("Tabungan", "Buat target lalu Setor/Tarik. Aplikasi menghitung saran jumlah nabung per bulan."),
+            ("Laporan", "Laba Rugi (pendapatan - beban), Neraca (aset, kewajiban, ekuitas) dan grafik tren."),
+            ("Data Anda", "Data tersimpan di HP ini. Jika aplikasi dihapus, data ikut hilang, jadi rutin gunakan "
+                          "Ekspor & Bagikan Data atau Backup Database."),
         ])
 
     def hapus_semua(self):
@@ -1499,69 +1967,96 @@ class Utama(FloatLayout):
         self.form("Atur Anggaran", fields, simpan)
 
     # ==================================================================
-    # LAPORAN
+    # LAPORAN: Laba Rugi, Neraca, Grafik
     # ==================================================================
     def s_laporan(self):
-        d = self.db
-        bl = self.bulan.strftime("%Y-%m")
+        self.tambah(self.chips([("labarugi", "Laba Rugi"), ("neraca", "Neraca"), ("grafik", "Grafik")],
+                               self.tab_lap, self.set_tab_lap))
+        if self.tab_lap == "neraca":
+            self.lap_neraca()
+            return
         self.tambah(self.w_nav_bulan())
-        m = d.val("SELECT SUM(jumlah) FROM transaksi WHERE tipe='masuk' AND substr(tanggal,1,7)=?", (bl,))
-        k = d.val("SELECT SUM(jumlah) FROM transaksi WHERE tipe='keluar' AND substr(tanggal,1,7)=?", (bl,))
-        c = Kartu(pad=16, spacing=dp(4))
-        c.add_widget(Baris("Total pemasukan", rp(m), C_HIJAU))
-        c.add_widget(Baris("Total pengeluaran", rp(k), C_MERAH))
-        c.add_widget(Baris("Sisa (selisih)", rp(m - k), C_HIJAU if m >= k else C_MERAH))
-        if m > 0:
-            c.add_widget(Baris("Rasio tabungan", "%.0f%%" % ((m - k) / m * 100), C_PRIMER))
-        self.tambah(c)
+        if self.tab_lap == "grafik":
+            self.lap_grafik()
+        else:
+            self.lap_labarugi()
 
-        for tipe, judul, total in (("keluar", "Pengeluaran per kategori", k), ("masuk", "Pemasukan per kategori", m)):
-            rows = d.q("SELECT kategori, SUM(jumlah) t FROM transaksi WHERE tipe=? AND substr(tanggal,1,7)=? "
-                       "GROUP BY kategori ORDER BY t DESC", (tipe, bl))
-            c = Kartu(pad=16, spacing=dp(4))
-            c.add_widget(Lbl(judul, 15, bold=True))
+    def set_tab_lap(self, kode):
+        self.tab_lap = kode
+        self.refresh()
+
+    def lap_labarugi(self):
+        d = self.db
+        a, z = self.bulan.isoformat(), akhir_bulan(self.bulan).isoformat()
+        k = Kartu(pad=16, spacing=dp(3))
+        k.add_widget(Lbl("LAPORAN LABA RUGI", 13, C_PRIMER, True))
+        k.add_widget(Lbl("Periode %s" % bulan_label(self.bulan), 11, C_ABU))
+        k.add_widget(Garis())
+        totals = {}
+        for tipe, judul, namatot in (("masuk", "PENDAPATAN", "Total Pendapatan"), ("keluar", "BEBAN", "Total Beban")):
+            k.add_widget(Widget(size_hint_y=None, height=dp(4)))
+            k.add_widget(Lbl(judul, 12, C_ABU, True))
+            rows = d.q("SELECT kategori, SUM(jumlah) t FROM transaksi WHERE tipe=? AND tanggal>=? AND tanggal<=? "
+                       "GROUP BY kategori ORDER BY t DESC", (tipe, a, z))
+            tot = 0.0
             if not rows:
-                c.add_widget(Lbl("Tidak ada data.", 13, C_ABU))
-            else:
-                c.add_widget(Donat([(r["t"], PALET[i % len(PALET)]) for i, r in enumerate(rows)],
-                                   "Total\n" + rp(total)))
-                for i, r in enumerate(rows):
-                    row = BoxLayout(size_hint_y=None, height=dp(28), spacing=dp(8))
-                    dot = Dot(PALET[i % len(PALET)], pos_hint={"center_y": 0.5})
-                    row.add_widget(dot)
-                    row.add_widget(Lbl(r["kategori"], 13, size_hint_y=1))
-                    pc = Label(text="%s (%.0f%%)" % (rp(r["t"]), r["t"] / total * 100 if total else 0),
-                               font_size=sp(13), bold=True, color=C_TEKS, size_hint=(None, 1))
-                    pc.bind(texture_size=lambda inst, v: setattr(inst, "width", v[0] + dp(2)))
-                    row.add_widget(pc)
-                    c.add_widget(row)
-            self.tambah(c)
+                k.add_widget(Lbl("   (tidak ada)", 12, C_ABU))
+            for r in rows:
+                k.add_widget(Baris("   " + r["kategori"], rp(r["t"]), None, 13, bold_kanan=False))
+                tot += r["t"]
+            k.add_widget(Garis())
+            k.add_widget(Baris(namatot, rp(tot), C_HIJAU if tipe == "masuk" else C_MERAH, 14, True))
+            totals[tipe] = tot
+        laba = totals["masuk"] - totals["keluar"]
+        k.add_widget(Garis(2))
+        k.add_widget(Baris("LABA (RUGI) BERSIH", rp(laba), C_HIJAU if laba >= 0 else C_MERAH, 15, True))
+        if totals["masuk"] > 0:
+            k.add_widget(Lbl("Margin: %.0f%% dari pendapatan" % (laba / totals["masuk"] * 100), 11, C_ABU))
+        self.tambah(k)
+        rows = [(r["kategori"], r["t"]) for r in d.q(
+            "SELECT kategori, SUM(jumlah) t FROM transaksi WHERE tipe='keluar' AND tanggal>=? AND tanggal<=? "
+            "GROUP BY kategori ORDER BY t DESC", (a, z))]
+        self.tambah(self.w_donat(rows, "Komposisi Beban", "Beban"))
 
-        data = []
-        for i in range(5, -1, -1):
-            mm = self.bulan.month - 1 - i
-            tgl = date(self.bulan.year + mm // 12, mm % 12 + 1, 1)
-            b_ = tgl.strftime("%Y-%m")
-            data.append((BULAN[tgl.month - 1][:3],
-                         d.val("SELECT SUM(jumlah) FROM transaksi WHERE tipe='masuk' AND substr(tanggal,1,7)=?", (b_,)),
-                         d.val("SELECT SUM(jumlah) FROM transaksi WHERE tipe='keluar' AND substr(tanggal,1,7)=?", (b_,))))
-        maks = max([max(a, b) for _, a, b in data] + [1])
-        c = Kartu(pad=16, spacing=dp(6))
-        c.add_widget(Lbl("Tren 6 bulan terakhir", 15, bold=True))
-        lg = BoxLayout(size_hint_y=None, height=dp(20), spacing=dp(6))
-        lg.add_widget(Dot(C_HIJAU, pos_hint={"center_y": 0.5}))
-        lg.add_widget(Lbl("Masuk", 12, C_ABU, size_hint_y=1))
-        lg.add_widget(Dot(C_MERAH, pos_hint={"center_y": 0.5}))
-        lg.add_widget(Lbl("Keluar", 12, C_ABU, size_hint_y=1))
-        c.add_widget(lg)
-        tren = BoxLayout(size_hint_y=None, height=dp(170), spacing=dp(4))
-        for nama, a, b in data:
-            kol = BoxLayout(orientation="vertical", spacing=dp(4))
-            kol.add_widget(BarArea(a, b, maks))
-            kol.add_widget(Label(text=nama, font_size=sp(11), color=C_ABU, size_hint_y=None, height=dp(16)))
-            tren.add_widget(kol)
-        c.add_widget(tren)
-        self.tambah(c)
+    def lap_neraca(self):
+        kas, tab, piut, hut = self.posisi()
+        aset = kas + tab + piut
+        eku = aset - hut
+        k = Kartu(pad=16, spacing=dp(3))
+        k.add_widget(Lbl("NERACA (POSISI KEUANGAN)", 13, C_PRIMER, True))
+        k.add_widget(Lbl("Per %s" % fmt_tgl(date.today().isoformat()), 11, C_ABU))
+        k.add_widget(Garis())
+        k.add_widget(Widget(size_hint_y=None, height=dp(4)))
+        k.add_widget(Lbl("ASET", 12, C_ABU, True))
+        k.add_widget(Baris("   Kas & setara kas", rp(kas), None, 13, bold_kanan=False))
+        k.add_widget(Baris("   Tabungan", rp(tab), None, 13, bold_kanan=False))
+        k.add_widget(Baris("   Piutang", rp(piut), None, 13, bold_kanan=False))
+        k.add_widget(Garis())
+        k.add_widget(Baris("Total Aset", rp(aset), C_HIJAU, 14, True))
+        k.add_widget(Widget(size_hint_y=None, height=dp(8)))
+        k.add_widget(Lbl("KEWAJIBAN", 12, C_ABU, True))
+        k.add_widget(Baris("   Hutang", rp(hut), None, 13, bold_kanan=False))
+        k.add_widget(Garis())
+        k.add_widget(Baris("Total Kewajiban", rp(hut), C_MERAH, 14, True))
+        k.add_widget(Widget(size_hint_y=None, height=dp(8)))
+        k.add_widget(Lbl("EKUITAS", 12, C_ABU, True))
+        k.add_widget(Garis(2))
+        k.add_widget(Baris("Kekayaan Bersih", rp(eku), C_HIJAU if eku >= 0 else C_MERAH, 15, True))
+        k.add_widget(Lbl("Aset (%s) = Kewajiban (%s) + Ekuitas (%s)" % (rp(aset), rp(hut), rp(eku)), 10, C_ABU))
+        self.tambah(k)
+        if aset + hut > 0:
+            self.tambah(self.w_donat([("Kas", max(kas, 0)), ("Tabungan", tab), ("Piutang", piut)],
+                                     "Komposisi Aset", "Aset"))
+
+    def lap_grafik(self):
+        self.tambah(self.w_arus(self.bulan, "Tren 6 Bulan (sampai %s)" % bulan_label(self.bulan)))
+        a, z = self.bulan.isoformat(), akhir_bulan(self.bulan).isoformat()
+        for tipe, judul, ket in (("keluar", "Pengeluaran per Kategori", "Keluar"),
+                                 ("masuk", "Pemasukan per Kategori", "Masuk")):
+            rows = [(r["kategori"], r["t"]) for r in self.db.q(
+                "SELECT kategori, SUM(jumlah) t FROM transaksi WHERE tipe=? AND tanggal>=? AND tanggal<=? "
+                "GROUP BY kategori ORDER BY t DESC", (tipe, a, z))]
+            self.tambah(self.w_donat(rows, judul, ket))
 
 
 # ----------------------------------------------------------------------
@@ -1569,7 +2064,6 @@ class CatatanKeuanganApp(App):
     title = "Catatan Keuangan"
 
     def build(self):
-        Window.clearcolor = C_BG
         if platform in ("linux", "win", "macosx"):
             Window.size = (420, 820)
         self.utama = Utama(self)
@@ -1588,7 +2082,7 @@ class CatatanKeuanganApp(App):
         return True
 
     def _tombol(self, window, key, *args):
-        if key == 27:  # tombol Back
+        if key == 27:
             return self.utama.tombol_kembali_android()
         return False
 
